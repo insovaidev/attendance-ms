@@ -1,3 +1,5 @@
+import { SERVICES, type ServiceToken } from './services.js';
+
 /**
  * Events = facts that already happened. (client.emit, fire-and-forget)
  *
@@ -13,6 +15,20 @@ export const EVENTS = {
   ATTENDANCE_CHECKED_IN: 'attendance.checked_in',
   ATTENDANCE_CHECKED_OUT: 'attendance.checked_out',
 } as const;
+
+export type EventName = (typeof EVENTS)[keyof typeof EVENTS];
+
+/**
+ * Durable consumers of each event. These are delivered through the outbox
+ * (at-least-once, retried until acknowledged). The gateway's live SSE feed
+ * is best-effort and is emitted directly with publish(), so it is not here.
+ */
+export const EVENT_DESTINATIONS: Record<EventName, ServiceToken[]> = {
+  [EVENTS.USER_REGISTERED]: [SERVICES.NOTIFICATION],
+  [EVENTS.SHIFT_ASSIGNED]: [SERVICES.NOTIFICATION],
+  [EVENTS.ATTENDANCE_CHECKED_IN]: [SERVICES.NOTIFICATION],
+  [EVENTS.ATTENDANCE_CHECKED_OUT]: [SERVICES.NOTIFICATION],
+};
 
 export interface EventEnvelope<T> {
   eventId: string;

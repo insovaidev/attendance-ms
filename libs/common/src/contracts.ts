@@ -25,6 +25,10 @@ export interface RegisterPayload {
   name: string;
 }
 
+export interface CreateUserPayload extends RegisterPayload {
+  role: Role;
+}
+
 export interface LoginPayload {
   email: string;
   password: string;

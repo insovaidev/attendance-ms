@@ -15,7 +15,7 @@
     "prisma:generate": "prisma generate --config apps/auth/prisma.config.ts && prisma generate --config apps/shift/prisma.config.ts && prisma generate --config apps/attendance/prisma.config.ts && prisma generate --config apps/notification/prisma.config.ts",
     "prisma:migrate": "prisma migrate dev --name init --config apps/auth/prisma.config.ts && prisma migrate dev --name init --config apps/shift/prisma.config.ts && prisma migrate dev --name init --config apps/attendance/prisma.config.ts && prisma migrate dev --name init --config apps/notification/prisma.config.ts",
     "prisma:deploy": "prisma migrate deploy --config apps/auth/prisma.config.ts && prisma migrate deploy --config apps/shift/prisma.config.ts && prisma migrate deploy --config apps/attendance/prisma.config.ts && prisma migrate deploy --config apps/notification/prisma.config.ts",
-    "setup": "npm run db:create && npm run prisma:generate && npm run prisma:migrate",
+    "setup": "npm run env:init && npm run db:create && npm run prisma:generate && npm run prisma:migrate",
     "dev": "npm run build && concurrently -n tsc,gateway,auth,shift,attend,notify -c gray,cyan,magenta,yellow,green,blue \"npm:build:watch\" \"npm:dev:gateway\" \"npm:dev:auth\" \"npm:dev:shift\" \"npm:dev:attendance\" \"npm:dev:notification\"",
     "dev:gateway": "node --watch --env-file-if-exists=.env dist/apps/gateway/src/main.js",
     "dev:auth": "node --watch --env-file-if-exists=.env dist/apps/auth/src/main.js",
@@ -27,7 +27,9 @@
     "start:shift": "node --env-file-if-exists=.env dist/apps/shift/src/main.js",
     "start:attendance": "node --env-file-if-exists=.env dist/apps/attendance/src/main.js",
     "start:notification": "node --env-file-if-exists=.env dist/apps/notification/src/main.js",
-    "demo": "node scripts/demo.mjs"
+    "demo": "node --env-file-if-exists=.env scripts/demo.mjs",
+    "env:init": "node scripts/env-init.mjs",
+    "test": "npm run build && node --test \"test/**/*.test.mjs\""
   },
   "dependencies": {
     "@nestjs/common": "^12.1.1",

@@ -46,3 +46,22 @@ model AttendanceRecord {
   @@unique([userId, workDate])
   @@index([workDate])
 }
+
+// Transactional outbox: events written in the same transaction as the change
+// that caused them, then delivered by OutboxRelay (libs/common/src/outbox.ts).
+model OutboxEvent {
+  id            String    @id @default(uuid()) @db.Uuid
+  eventId       String    @db.Uuid
+  eventName     String
+  destination   String
+  payload       Json
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime  @default(now())
+  lockedUntil   DateTime?
+  publishedAt   DateTime?
+  lastError     String?
+  createdAt     DateTime  @default(now())
+
+  @@unique([eventId, destination])
+  @@index([publishedAt, nextAttemptAt])
+}

@@ -36,6 +36,6 @@ export class ShiftController {
 
   @MessagePattern(HEALTH_PATTERN)
   health() {
-    return { service: 'shift', ok: true };
+    return this.shifts.health();
   }
 }

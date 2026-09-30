@@ -15,7 +15,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import type { ShiftType } from '#common';
+import type { Role, ShiftType } from '#common';
 
 /**
  * HTTP input validation lives at the edge (the gateway).
@@ -29,6 +29,7 @@ export class RegisterDto {
 
   @IsString()
   @MinLength(8)
+  @MaxLength(200)
   password: string;
 
   @IsString()
@@ -37,11 +38,17 @@ export class RegisterDto {
   name: string;
 }
 
+export class CreateUserDto extends RegisterDto {
+  @IsIn(['ADMIN', 'EMPLOYEE'])
+  role: Role;
+}
+
 export class LoginDto {
   @IsEmail()
   email: string;
 
   @IsString()
+  @MaxLength(200)
   password: string;
 }
 

@@ -1,13 +1,11 @@
-import { Inject, Injectable } from '@nestjs/common';
-import { ClientProxy } from '@nestjs/microservices';
+import { Injectable } from '@nestjs/common';
 import {
   EVENTS,
   hhmmToMinutes,
   isHHMM,
   localParts,
-  publish,
+  outboxRows,
   rpcError,
-  SERVICES,
   type AssignShiftPayload,
   type CreateShiftPayload,
   type ResolvedShift,
@@ -19,10 +17,7 @@ import { PrismaService } from './prisma.service.js';
 
 @Injectable()
 export class ShiftService {
-  constructor(
-    private readonly prisma: PrismaService,
-    @Inject(SERVICES.NOTIFICATION) private readonly notification: ClientProxy,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   async create(input: CreateShiftPayload) {
     if (!isHHMM(input.startTime) || !isHHMM(input.endTime)) {
@@ -70,20 +65,34 @@ export class ShiftService {
     // calling auth here would couple the two services. The gateway already
     // checks the user exists before sending this. (Exercise: what happens
     // if that user is deleted later? Who should clean up assignments?)
-    const assignment = await this.prisma.shiftAssignment.create({
-      data: { userId: input.userId, shiftId: shift.id, startDate, endDate },
-    });
-
-    publish<ShiftAssignedEvent>(this.notification, EVENTS.SHIFT_ASSIGNED, {
-      assignmentId: assignment.id,
-      userId: assignment.userId,
-      shiftId: shift.id,
-      shiftName: shift.name,
-      startDate: input.startDate,
-      endDate: input.endDate ?? null,
+    // The assignment and its event are committed together (transactional outbox).
+    const assignment = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.shiftAssignment.create({
+        data: { userId: input.userId, shiftId: shift.id, startDate, endDate },
+      });
+      await tx.outboxEvent.createMany({
+        data: outboxRows<ShiftAssignedEvent>(EVENTS.SHIFT_ASSIGNED, {
+          assignmentId: created.id,
+          userId: created.userId,
+          shiftId: shift.id,
+          shiftName: shift.name,
+          startDate: input.startDate,
+          endDate: input.endDate ?? null,
+        }),
+      });
+      return created;
     });
 
     return { ...assignment, shift };
+  }
+
+  async health() {
+    try {
+      await this.prisma.$queryRaw`SELECT 1`;
+    } catch {
+      throw rpcError(503, 'shift database unavailable');
+    }
+    return { service: 'shift', ok: true };
   }
 
   /**

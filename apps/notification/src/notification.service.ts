@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
   COMPANY_TZ,
+  rpcError,
   EVENTS,
   type AttendanceCheckedInEvent,
   type AttendanceCheckedOutEvent,
@@ -99,15 +100,28 @@ export class NotificationService {
     });
   }
 
+  async health() {
+    try {
+      await this.prisma.$queryRaw`SELECT 1`;
+    } catch {
+      throw rpcError(503, 'notification database unavailable');
+    }
+    return { service: 'notification', ok: true };
+  }
+
   private async chatFor(userId: string): Promise<string | null> {
     const link = await this.prisma.telegramLink.findUnique({ where: { userId } });
     return link?.chatId ?? null;
   }
 
   /**
-   * Idempotent delivery: "claim" the event by inserting its eventId first.
-   * If the same event arrives twice (retries, redelivery from a broker),
-   * the unique index rejects the second insert and we skip sending.
+   * Idempotent, retry-safe delivery.
+   *
+   * The eventId is claimed first (unique index) as PENDING. A redelivered
+   * event whose row is already SENT, or SKIPPED, is ignored. A PENDING or
+   * FAILED row is sent again: that covers a crash between claiming and
+   * sending, and Telegram being down. When sending fails we record FAILED
+   * and rethrow, so the outbox relay retries later with backoff.
    */
   private async deliver(
     eventId: string,
@@ -118,31 +132,43 @@ export class NotificationService {
   ) {
     const willSend = Boolean(chatId) && this.telegram.enabled;
 
-    let logId: string;
-    try {
-      const log = await this.prisma.notificationLog.create({
-        data: { eventId, eventName, userId, chatId, message, status: willSend ? 'SENT' : 'SKIPPED' },
-      });
-      logId = log.id;
-    } catch (err) {
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        this.logger.warn(`Duplicate event ${eventId} (${eventName}) ignored`);
-        return;
-      }
-      throw err;
-    }
-
-    if (!chatId) {
-      this.logger.log(`[${eventName}] ${message} (no Telegram chat linked)`);
+    let log = await this.prisma.notificationLog.findUnique({ where: { eventId } });
+    if (log && (log.status === 'SENT' || log.status === 'SKIPPED')) {
+      this.logger.warn(`Duplicate event ${eventId} (${eventName}) ignored`);
       return;
     }
+    if (!log) {
+      try {
+        log = await this.prisma.notificationLog.create({
+          data: { eventId, eventName, userId, chatId, message, status: willSend ? 'PENDING' : 'SKIPPED' },
+        });
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+          this.logger.warn(`Duplicate event ${eventId} (${eventName}) ignored`);
+          return;
+        }
+        throw err;
+      }
+      if (!willSend) {
+        this.logger.log(`[${eventName}] ${message} (${chatId ? 'no bot token' : 'no Telegram chat linked'})`);
+        return;
+      }
+    }
 
     try {
-      await this.telegram.send(chatId, message);
+      await this.telegram.send(chatId ?? log.chatId!, message);
+      await this.prisma.notificationLog.update({
+        where: { id: log.id },
+        data: { status: 'SENT', error: null, attempts: { increment: 1 } },
+      });
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       this.logger.error(`Telegram delivery failed for ${eventId}: ${error}`);
-      await this.prisma.notificationLog.update({ where: { id: logId }, data: { status: 'FAILED', error } });
+      await this.prisma.notificationLog.update({
+        where: { id: log.id },
+        data: { status: 'FAILED', error, attempts: { increment: 1 } },
+      });
+      throw err;
     }
   }
 }

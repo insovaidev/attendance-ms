@@ -1,27 +1,35 @@
 # Whole system in containers:
-#   npm run prisma:migrate     # once, on your machine, to create prisma/migrations
+#   npm run env:init           # once: creates .env with random secrets (compose reads it)
 #   docker compose up --build
 # Gateway: http://localhost:3000
+#
+# Required variables come from .env; compose refuses to start without them.
+
+x-env: &env
+  NODE_ENV: production
+  JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+  INTERNAL_TOKEN: ${INTERNAL_TOKEN:?set INTERNAL_TOKEN in .env}
+  JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
+  COMPANY_TZ: ${COMPANY_TZ:-Asia/Phnom_Penh}
+  # Each service connects with its own role (see docker/postgres-init.sh).
+  AUTH_DATABASE_URL: postgresql://auth_user:${AUTH_DB_PASSWORD:?}@postgres:5432/auth_db
+  SHIFT_DATABASE_URL: postgresql://shift_user:${SHIFT_DB_PASSWORD:?}@postgres:5432/shift_db
+  ATTENDANCE_DATABASE_URL: postgresql://attendance_user:${ATTENDANCE_DB_PASSWORD:?}@postgres:5432/attendance_db
+  NOTIFICATION_DATABASE_URL: postgresql://notification_user:${NOTIFICATION_DB_PASSWORD:?}@postgres:5432/notification_db
+  # Service discovery, the simple way: Docker DNS resolves service names.
+  AUTH_HOST: auth
+  SHIFT_HOST: shift
+  ATTENDANCE_HOST: attendance
+  NOTIFICATION_HOST: notification
+  GATEWAY_EVENTS_HOST: gateway
+  # Listen on the private compose network. These ports are NOT published.
+  BIND_HOST: 0.0.0.0
 
 x-service: &service
-  build: .
+  build: { context: ., target: runtime }
   image: attendance-ms
   restart: unless-stopped
-  environment: &env
-    JWT_SECRET: ${JWT_SECRET:-change-me-to-a-long-random-string}
-    COMPANY_TZ: Asia/Phnom_Penh
-    AUTH_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/auth_db
-    SHIFT_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/shift_db
-    ATTENDANCE_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/attendance_db
-    NOTIFICATION_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/notification_db
-    # Service discovery, the simple way: Docker DNS resolves service names.
-    AUTH_HOST: auth
-    SHIFT_HOST: shift
-    ATTENDANCE_HOST: attendance
-    NOTIFICATION_HOST: notification
-    GATEWAY_EVENTS_HOST: gateway
-    TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-    TELEGRAM_ADMIN_CHAT_ID: ${TELEGRAM_ADMIN_CHAT_ID:-}
+  environment: *env
   depends_on:
     migrate:
       condition: service_completed_successfully
@@ -29,25 +37,30 @@ x-service: &service
 services:
   postgres:
     image: postgres:17-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:?}
+      SHIFT_DB_PASSWORD: ${SHIFT_DB_PASSWORD:?}
+      ATTENDANCE_DB_PASSWORD: ${ATTENDANCE_DB_PASSWORD:?}
+      NOTIFICATION_DB_PASSWORD: ${NOTIFICATION_DB_PASSWORD:?}
+    # Only reachable from this machine (for psql / Prisma Studio), not the network.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./docker/postgres-init.sh:/docker-entrypoint-initdb.d/init.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 3s
       timeout: 3s
       retries: 20
 
-  # Applies each service's migrations, then exits.
+  # Applies each service's migrations with that service's own role, then exits.
   migrate:
-    build: .
-    image: attendance-ms
-    command: npm run prisma:deploy
+    build: { context: ., target: migrate }
+    image: attendance-ms-migrate
     environment: *env
     depends_on:
       postgres:
@@ -56,6 +69,12 @@ services:
   auth:
     <<: *service
     command: node dist/apps/auth/src/main.js
+    environment:
+      <<: *env
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_NAME: ${ADMIN_NAME:-Admin}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
 
   shift:
     <<: *service
@@ -68,10 +87,18 @@ services:
   notification:
     <<: *service
     command: node dist/apps/notification/src/main.js
+    environment:
+      <<: *env
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ADMIN_CHAT_ID: ${TELEGRAM_ADMIN_CHAT_ID:-}
 
   gateway:
     <<: *service
     command: node dist/apps/gateway/src/main.js
+    environment:
+      <<: *env
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      TRUST_PROXY: ${TRUST_PROXY:-}
     ports:
       - "3000:3000"
 

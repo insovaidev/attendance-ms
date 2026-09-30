@@ -10,6 +10,8 @@ export const AUTH_PATTERNS = {
   LOGIN: 'auth.login',
   GET_USER: 'auth.get_user',
   LIST_USERS: 'auth.list_users',
+  /** Admin creates an account (the only way in when public registration is off). */
+  CREATE_USER: 'auth.create_user',
 } as const;
 
 export const SHIFT_PATTERNS = {

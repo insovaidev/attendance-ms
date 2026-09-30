@@ -29,6 +29,6 @@ export class AttendanceController {
 
   @MessagePattern(HEALTH_PATTERN)
   health() {
-    return { service: 'attendance', ok: true };
+    return this.attendance.health();
   }
 }

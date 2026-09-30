@@ -1,7 +1,8 @@
 // End-to-end walkthrough through the gateway. Run with all services up:
 //   npm run dev        (terminal 1)
 //   npm run demo       (terminal 2)
-// Safe to run more than once.
+// Safe to run more than once. Reads ADMIN_EMAIL / ADMIN_PASSWORD from .env
+// (the auth service creates that admin on startup).
 
 const BASE = process.env.GATEWAY_URL ?? 'http://localhost:3000';
 
@@ -23,22 +24,29 @@ function step(title) {
   console.log(`\n\x1b[36m▸ ${title}\x1b[0m`);
 }
 
-async function registerOrLogin(email, name) {
+async function login(email, password) {
+  const res = await api('POST', '/auth/login', { body: { email, password } });
+  if (res.status !== 200) throw new Error(`login failed: ${JSON.stringify(res)}`);
+  return res.data;
+}
+
+/** Admin creates the account (409 on reruns is fine), then we log in as it. */
+async function createAndLogin(adminToken, email, name) {
   const password = 'password123';
-  const reg = await api('POST', '/auth/register', { body: { email, password, name } });
-  if (reg.status !== 201 && reg.status !== 409) throw new Error(`register failed: ${JSON.stringify(reg)}`);
-  const login = await api('POST', '/auth/login', { body: { email, password } });
-  if (login.status !== 200) throw new Error(`login failed: ${JSON.stringify(login)}`);
-  return login.data;
+  const res = await api('POST', '/users', { token: adminToken, body: { email, password, name, role: 'EMPLOYEE' } });
+  if (res.status !== 201 && res.status !== 409) throw new Error(`create user failed: ${JSON.stringify(res)}`);
+  return login(email, password);
 }
 
 /** Listen to the admin SSE stream and collect events. */
-function listen(token) {
+async function listen(token) {
+  // EventSource can't send headers, so get a 60-second ticket for the URL.
+  const { data } = await api('POST', '/attendance/live/ticket', { token });
   const events = [];
   const controller = new AbortController();
   (async () => {
     try {
-      const res = await fetch(`${BASE}/attendance/live?token=${token}`, { signal: controller.signal });
+      const res = await fetch(`${BASE}/attendance/live?ticket=${data.ticket}`, { signal: controller.signal });
       const decoder = new TextDecoder();
       for await (const chunk of res.body) {
         for (const block of decoder.decode(chunk).split('\n\n')) {
@@ -59,16 +67,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 step('Health check — gateway pings every service');
 console.log(JSON.stringify((await api('GET', '/health')).data, null, 2));
 
-step('Register + login admin (the first account ever created becomes ADMIN)');
-const admin = await registerOrLogin('admin@example.com', 'Admin');
-console.log(`${admin.user.name} → role ${admin.user.role}`);
-if (admin.user.role !== 'ADMIN') {
-  console.log('admin@example.com is not ADMIN (another account was created first). Reset the auth_db to rerun from scratch.');
+step('Log in as the admin created from ADMIN_EMAIL / ADMIN_PASSWORD');
+if (!process.env.ADMIN_EMAIL || !process.env.ADMIN_PASSWORD) {
+  console.log('Set ADMIN_EMAIL and ADMIN_PASSWORD (npm run env:init writes them to .env).');
   process.exit(1);
 }
+const admin = await login(process.env.ADMIN_EMAIL, process.env.ADMIN_PASSWORD);
+console.log(`${admin.user.name} → role ${admin.user.role}`);
 
-step('Register + login employee');
-const emp = await registerOrLogin('sokha@example.com', 'Sokha');
+step('Admin creates an employee account, employee logs in');
+const emp = await createAndLogin(admin.accessToken, 'sokha@example.com', 'Sokha');
 console.log(`${emp.user.name} → role ${emp.user.role}`);
 
 step('Employee tries an admin route (should be 403)');
@@ -106,10 +114,10 @@ step('Employee: "what shift am I on right now?"');
 console.log((await api('GET', '/shifts/me/today', { token: emp.accessToken })).data);
 
 step('Admin opens the live dashboard stream (SSE)');
-const live = listen(admin.accessToken);
+const live = await listen(admin.accessToken);
 await sleep(300);
 
-step('Employee checks in (attendance → sync call to shift → events to notification + gateway)');
+step('Employee checks in (attendance → sync call to shift → outbox → notification, + live feed)');
 const checkIn = await api('POST', '/attendance/check-in', { token: emp.accessToken, body: { note: 'demo' } });
 if (checkIn.status === 409) console.log('409:', checkIn.data.message, '(already checked in today — fine on reruns)');
 else console.log(checkIn.status, { status: checkIn.data.status, lateMinutes: checkIn.data.lateMinutes, shift: checkIn.data.shiftName });
@@ -122,7 +130,7 @@ step('Employee checks out');
 const out = await api('POST', '/attendance/check-out', { token: emp.accessToken });
 console.log(out.status, out.status === 201 ? { leftEarlyMinutes: out.data.leftEarlyMinutes } : out.data.message);
 
-await sleep(500);
+await sleep(1500); // the outbox relay polls every second
 live.stop();
 
 step('Events the admin dashboard received over SSE');

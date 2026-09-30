@@ -1,6 +1,12 @@
 import { Controller } from '@nestjs/common';
 import { MessagePattern, Payload } from '@nestjs/microservices';
-import { AUTH_PATTERNS, HEALTH_PATTERN, type LoginPayload, type RegisterPayload } from '#common';
+import {
+  AUTH_PATTERNS,
+  HEALTH_PATTERN,
+  type CreateUserPayload,
+  type LoginPayload,
+  type RegisterPayload,
+} from '#common';
 import { AuthService } from './auth.service.js';
 
 /**
@@ -14,6 +20,11 @@ export class AuthController {
   @MessagePattern(AUTH_PATTERNS.REGISTER)
   register(@Payload() payload: RegisterPayload) {
     return this.auth.register(payload);
+  }
+
+  @MessagePattern(AUTH_PATTERNS.CREATE_USER)
+  createUser(@Payload() payload: CreateUserPayload) {
+    return this.auth.createUser(payload);
   }
 
   @MessagePattern(AUTH_PATTERNS.LOGIN)
@@ -33,6 +44,6 @@ export class AuthController {
 
   @MessagePattern(HEALTH_PATTERN)
   health() {
-    return { service: 'auth', ok: true };
+    return this.auth.health();
   }
 }

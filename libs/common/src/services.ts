@@ -37,7 +37,11 @@ export function endpoint(service: ServiceToken): Endpoint {
   };
 }
 
-/** Address a service should bind to when it starts listening. */
+/**
+ * Address a service should bind to when it starts listening.
+ * Loopback by default; Docker Compose sets BIND_HOST=0.0.0.0 on its
+ * private network. Never publish these ports to the internet.
+ */
 export function listenAddress(service: ServiceToken): Endpoint {
-  return { host: process.env.BIND_HOST ?? '0.0.0.0', port: endpoint(service).port };
+  return { host: process.env.BIND_HOST ?? '127.0.0.1', port: endpoint(service).port };
 }

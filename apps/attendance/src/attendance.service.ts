@@ -5,6 +5,7 @@ import {
   EVENTS,
   hhmmToMinutes,
   localParts,
+  outboxRows,
   publish,
   rpcError,
   SERVICES,
@@ -16,11 +17,14 @@ import {
   type CheckOutPayload,
   type ResolvedShift,
   type ResolveShiftPayload,
+  withInternalToken,
 } from '#common';
 import { Prisma } from './generated/prisma/client.js';
 import { PrismaService } from './prisma.service.js';
 
 const SHIFT_TIMEOUT_MS = Number(process.env.SHIFT_TIMEOUT_MS ?? 2000);
+/** How far back the re-verification job looks for UNVERIFIED check-ins. */
+const REVERIFY_WINDOW_DAYS = 3;
 
 @Injectable()
 export class AttendanceService {
@@ -29,7 +33,6 @@ export class AttendanceService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(SERVICES.SHIFT) private readonly shift: ClientProxy,
-    @Inject(SERVICES.NOTIFICATION) private readonly notification: ClientProxy,
     @Inject(SERVICES.GATEWAY_EVENTS) private readonly gatewayEvents: ClientProxy,
   ) {}
 
@@ -46,33 +49,37 @@ export class AttendanceService {
     // ---- The synchronous call -------------------------------------------
     // Attendance cannot decide ON_TIME vs LATE without the shift engine.
     // If shift is slow or down we don't block the employee: we record the
-    // check-in as UNVERIFIED. (Exercise: add a job that re-verifies these.)
+    // check-in as UNVERIFIED; ReverifyJob fixes it once shift answers again.
     const { shift, reachable } = await this.resolveShift({ userId: user.id, at: now.toISOString() });
 
-    const status: AttendanceStatus = !reachable
-      ? 'UNVERIFIED'
-      : !shift
-        ? 'NO_SHIFT'
-        : shift.lateMinutes > 0
-          ? 'LATE'
-          : 'ON_TIME';
+    const status = statusFor(shift, reachable);
 
+    // ---- The asynchronous part ------------------------------------------
+    // The record and its event are committed in one transaction (outbox),
+    // so the notification is delivered even if notification is down right
+    // now or this process crashes right after the insert.
     let record;
     try {
-      record = await this.prisma.attendanceRecord.create({
-        data: {
-          userId: user.id,
-          userName: user.name,
-          workDate,
-          shiftId: shift?.shiftId ?? null,
-          shiftName: shift?.name ?? null,
-          shiftEndTime: shift?.endTime ?? null,
-          checkInAt: now,
-          status,
-          lateMinutes: shift?.lateMinutes ?? 0,
-          source,
-          note: note ?? null,
-        },
+      record = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.attendanceRecord.create({
+          data: {
+            userId: user.id,
+            userName: user.name,
+            workDate,
+            shiftId: shift?.shiftId ?? null,
+            shiftName: shift?.name ?? null,
+            shiftEndTime: shift?.endTime ?? null,
+            checkInAt: now,
+            status,
+            lateMinutes: shift?.lateMinutes ?? 0,
+            source,
+            note: note ?? null,
+          },
+        });
+        await tx.outboxEvent.createMany({
+          data: outboxRows(EVENTS.ATTENDANCE_CHECKED_IN, checkedInEvent(created)),
+        });
+        return created;
       });
     } catch (err) {
       // Two check-ins at the same instant: the unique index wins the race.
@@ -82,22 +89,8 @@ export class AttendanceService {
       throw err;
     }
 
-    // ---- The asynchronous part ------------------------------------------
-    // Attendance doesn't know or care what happens with this fact.
-    // Note the TCP limitation: we must emit to each listener by name.
-    // With a broker you'd publish ONCE and any number of services subscribe.
-    const event: AttendanceCheckedInEvent = {
-      recordId: record.id,
-      userId: user.id,
-      userName: user.name,
-      shiftName: record.shiftName,
-      checkInAt: record.checkInAt.toISOString(),
-      status: record.status,
-      lateMinutes: record.lateMinutes,
-      source: record.source,
-    };
-    publish(this.notification, EVENTS.ATTENDANCE_CHECKED_IN, event);
-    publish(this.gatewayEvents, EVENTS.ATTENDANCE_CHECKED_IN, event);
+    // The live dashboard is best-effort: a missed SSE update is harmless.
+    publish(this.gatewayEvents, EVENTS.ATTENDANCE_CHECKED_IN, checkedInEvent(record));
 
     return record;
   }
@@ -117,23 +110,31 @@ export class AttendanceService {
       ? Math.max(0, hhmmToMinutes(record.shiftEndTime) - local.minutes)
       : 0;
 
-    const updated = await this.prisma.attendanceRecord.update({
-      where: { id: record.id },
-      data: { checkOutAt: now, leftEarlyMinutes },
-    });
-
     const event: AttendanceCheckedOutEvent = {
-      recordId: updated.id,
+      recordId: record.id,
       userId: user.id,
       userName: user.name,
-      checkInAt: updated.checkInAt.toISOString(),
+      checkInAt: record.checkInAt.toISOString(),
       checkOutAt: now.toISOString(),
-      workedMinutes: Math.round((now.getTime() - updated.checkInAt.getTime()) / 60000),
+      workedMinutes: Math.round((now.getTime() - record.checkInAt.getTime()) / 60000),
       leftEarlyMinutes,
     };
-    publish(this.notification, EVENTS.ATTENDANCE_CHECKED_OUT, event);
-    publish(this.gatewayEvents, EVENTS.ATTENDANCE_CHECKED_OUT, event);
 
+    const updated = await this.prisma.$transaction(async (tx) => {
+      // "checkOutAt: null" makes the update conditional, so two check-outs
+      // racing each other can't both succeed.
+      const { count } = await tx.attendanceRecord.updateMany({
+        where: { id: record.id, checkOutAt: null },
+        data: { checkOutAt: now, leftEarlyMinutes },
+      });
+      if (count === 0) throw rpcError(409, 'You already checked out today');
+      await tx.outboxEvent.createMany({
+        data: outboxRows(EVENTS.ATTENDANCE_CHECKED_OUT, event),
+      });
+      return tx.attendanceRecord.findUniqueOrThrow({ where: { id: record.id } });
+    });
+
+    publish(this.gatewayEvents, EVENTS.ATTENDANCE_CHECKED_OUT, event);
     return updated;
   }
 
@@ -154,13 +155,53 @@ export class AttendanceService {
     });
   }
 
+  /** Re-asks shift about recent UNVERIFIED check-ins. Returns how many were fixed. */
+  async reverifyUnverified(limit = 50): Promise<number> {
+    const since = new Date(Date.now() - REVERIFY_WINDOW_DAYS * 86_400_000);
+    const pending = await this.prisma.attendanceRecord.findMany({
+      where: { status: 'UNVERIFIED', checkInAt: { gte: since } },
+      orderBy: { checkInAt: 'asc' },
+      take: limit,
+    });
+
+    let fixed = 0;
+    for (const record of pending) {
+      const { shift, reachable } = await this.resolveShift({
+        userId: record.userId,
+        at: record.checkInAt.toISOString(),
+      });
+      if (!reachable) break; // shift is still down; try again next round
+      const { count } = await this.prisma.attendanceRecord.updateMany({
+        where: { id: record.id, status: 'UNVERIFIED' },
+        data: {
+          status: statusFor(shift, true),
+          shiftId: shift?.shiftId ?? null,
+          shiftName: shift?.name ?? null,
+          shiftEndTime: shift?.endTime ?? null,
+          lateMinutes: shift?.lateMinutes ?? 0,
+        },
+      });
+      fixed += count;
+    }
+    return fixed;
+  }
+
+  async health() {
+    try {
+      await this.prisma.$queryRaw`SELECT 1`;
+    } catch {
+      throw rpcError(503, 'attendance database unavailable');
+    }
+    return { service: 'attendance', ok: true };
+  }
+
   private async resolveShift(
     payload: ResolveShiftPayload,
   ): Promise<{ shift: ResolvedShift | null; reachable: boolean }> {
     try {
       const shift = await firstValueFrom(
         this.shift
-          .send<ResolvedShift | null>(SHIFT_PATTERNS.RESOLVE_FOR_USER, payload)
+          .send<ResolvedShift | null>(SHIFT_PATTERNS.RESOLVE_FOR_USER, withInternalToken(payload))
           .pipe(timeout(SHIFT_TIMEOUT_MS)),
       );
       return { shift, reachable: true };
@@ -173,4 +214,32 @@ export class AttendanceService {
       return { shift: null, reachable: false };
     }
   }
+}
+
+function statusFor(shift: ResolvedShift | null, reachable: boolean): AttendanceStatus {
+  if (!reachable) return 'UNVERIFIED';
+  if (!shift) return 'NO_SHIFT';
+  return shift.lateMinutes > 0 ? 'LATE' : 'ON_TIME';
+}
+
+function checkedInEvent(record: {
+  id: string;
+  userId: string;
+  userName: string;
+  shiftName: string | null;
+  checkInAt: Date;
+  status: AttendanceStatus;
+  lateMinutes: number;
+  source: 'WEB' | 'TELEGRAM';
+}): AttendanceCheckedInEvent {
+  return {
+    recordId: record.id,
+    userId: record.userId,
+    userName: record.userName,
+    shiftName: record.shiftName,
+    checkInAt: record.checkInAt.toISOString(),
+    status: record.status,
+    lateMinutes: record.lateMinutes,
+    source: record.source,
+  };
 }

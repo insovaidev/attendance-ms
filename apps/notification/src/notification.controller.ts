@@ -1,5 +1,5 @@
 import { Controller } from '@nestjs/common';
-import { EventPattern, MessagePattern, Payload } from '@nestjs/microservices';
+import { MessagePattern, Payload } from '@nestjs/microservices';
 import {
   EVENTS,
   HEALTH_PATTERN,
@@ -17,26 +17,29 @@ import { NotificationService } from './notification.service.js';
 export class NotificationController {
   constructor(private readonly notifications: NotificationService) {}
 
-  // ---- Events: @EventPattern handlers return nothing to the sender ----
+  // ---- Events --------------------------------------------------------------
+  // Delivered by the publishers' outbox relays with request/reply, so the
+  // relay knows the event was processed. Returning normally acknowledges it;
+  // throwing makes the relay retry later (duplicates are ignored by eventId).
 
-  @EventPattern(EVENTS.USER_REGISTERED)
+  @MessagePattern(EVENTS.USER_REGISTERED)
   onUserRegistered(@Payload() event: EventEnvelope<UserRegisteredEvent>) {
-    return this.notifications.onUserRegistered(event);
+    return this.ack(this.notifications.onUserRegistered(event));
   }
 
-  @EventPattern(EVENTS.SHIFT_ASSIGNED)
+  @MessagePattern(EVENTS.SHIFT_ASSIGNED)
   onShiftAssigned(@Payload() event: EventEnvelope<ShiftAssignedEvent>) {
-    return this.notifications.onShiftAssigned(event);
+    return this.ack(this.notifications.onShiftAssigned(event));
   }
 
-  @EventPattern(EVENTS.ATTENDANCE_CHECKED_IN)
+  @MessagePattern(EVENTS.ATTENDANCE_CHECKED_IN)
   onCheckedIn(@Payload() event: EventEnvelope<AttendanceCheckedInEvent>) {
-    return this.notifications.onCheckedIn(event);
+    return this.ack(this.notifications.onCheckedIn(event));
   }
 
-  @EventPattern(EVENTS.ATTENDANCE_CHECKED_OUT)
+  @MessagePattern(EVENTS.ATTENDANCE_CHECKED_OUT)
   onCheckedOut(@Payload() event: EventEnvelope<AttendanceCheckedOutEvent>) {
-    return this.notifications.onCheckedOut(event);
+    return this.ack(this.notifications.onCheckedOut(event));
   }
 
   // ---- Requests: @MessagePattern handlers reply to the caller ----
@@ -53,6 +56,11 @@ export class NotificationController {
 
   @MessagePattern(HEALTH_PATTERN)
   health() {
-    return { service: 'notification', ok: true };
+    return this.notifications.health();
+  }
+
+  private async ack(work: Promise<void>) {
+    await work;
+    return { ok: true };
   }
 }

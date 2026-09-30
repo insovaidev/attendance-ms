@@ -20,6 +20,7 @@ model TelegramLink {
 }
 
 enum DeliveryStatus {
+  PENDING // claimed, not sent yet (or a previous attempt crashed)
   SENT
   SKIPPED // no chat linked or no bot token configured
   FAILED
@@ -36,5 +37,7 @@ model NotificationLog {
   message   String
   status    DeliveryStatus
   error     String?
+  attempts  Int            @default(0)
   createdAt DateTime       @default(now())
+  updatedAt DateTime       @default(now()) @updatedAt
 }

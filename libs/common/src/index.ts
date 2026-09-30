@@ -7,3 +7,6 @@ export * from './rpc-error.js';
 export * from './bootstrap.js';
 export * from './clients.js';
 export * from './publish.js';
+export * from './config.js';
+export * from './internal-auth.js';
+export * from './outbox.js';
