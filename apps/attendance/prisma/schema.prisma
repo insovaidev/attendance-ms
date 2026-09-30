@@ -1,0 +1,48 @@
+// Attendance service — owns check-in/check-out records.
+// userName and shiftName are copied in at check-in time (denormalized),
+// so reading history never needs to call auth or shift.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AttendanceStatus {
+  ON_TIME
+  LATE
+  NO_SHIFT   // checked in on a day with no assigned shift
+  UNVERIFIED // shift service was unreachable — fix later
+}
+
+enum CheckInSource {
+  WEB
+  TELEGRAM
+}
+
+model AttendanceRecord {
+  id               String           @id @default(uuid()) @db.Uuid
+  userId           String           @db.Uuid
+  userName         String
+  workDate         DateTime         @db.Date // local date in the company time zone
+  shiftId          String?          @db.Uuid
+  shiftName        String?
+  shiftEndTime     String?
+  checkInAt        DateTime
+  checkOutAt       DateTime?
+  status           AttendanceStatus
+  lateMinutes      Int              @default(0)
+  leftEarlyMinutes Int              @default(0)
+  source           CheckInSource    @default(WEB)
+  note             String?
+  createdAt        DateTime         @default(now())
+
+  // One check-in per person per day.
+  @@unique([userId, workDate])
+  @@index([workDate])
+}

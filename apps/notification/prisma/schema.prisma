@@ -1,0 +1,40 @@
+// Notification service — owns Telegram links and a log of what was sent.
+// It never writes to other services; it only reacts to their events.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model TelegramLink {
+  userId    String   @id @db.Uuid
+  chatId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum DeliveryStatus {
+  SENT
+  SKIPPED // no chat linked or no bot token configured
+  FAILED
+}
+
+model NotificationLog {
+  id        String         @id @default(uuid()) @db.Uuid
+  // Unique: if the same event is delivered twice, the second insert fails
+  // and we skip it. This is what makes the consumer idempotent.
+  eventId   String         @unique
+  eventName String
+  userId    String?        @db.Uuid
+  chatId    String?
+  message   String
+  status    DeliveryStatus
+  error     String?
+  createdAt DateTime       @default(now())
+}

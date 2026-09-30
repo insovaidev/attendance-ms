@@ -1,0 +1,79 @@
+# Whole system in containers:
+#   npm run prisma:migrate     # once, on your machine, to create prisma/migrations
+#   docker compose up --build
+# Gateway: http://localhost:3000
+
+x-service: &service
+  build: .
+  image: attendance-ms
+  restart: unless-stopped
+  environment: &env
+    JWT_SECRET: ${JWT_SECRET:-change-me-to-a-long-random-string}
+    COMPANY_TZ: Asia/Phnom_Penh
+    AUTH_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/auth_db
+    SHIFT_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/shift_db
+    ATTENDANCE_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/attendance_db
+    NOTIFICATION_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/notification_db
+    # Service discovery, the simple way: Docker DNS resolves service names.
+    AUTH_HOST: auth
+    SHIFT_HOST: shift
+    ATTENDANCE_HOST: attendance
+    NOTIFICATION_HOST: notification
+    GATEWAY_EVENTS_HOST: gateway
+    TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    TELEGRAM_ADMIN_CHAT_ID: ${TELEGRAM_ADMIN_CHAT_ID:-}
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Applies each service's migrations, then exits.
+  migrate:
+    build: .
+    image: attendance-ms
+    command: npm run prisma:deploy
+    environment: *env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  auth:
+    <<: *service
+    command: node dist/apps/auth/src/main.js
+
+  shift:
+    <<: *service
+    command: node dist/apps/shift/src/main.js
+
+  attendance:
+    <<: *service
+    command: node dist/apps/attendance/src/main.js
+
+  notification:
+    <<: *service
+    command: node dist/apps/notification/src/main.js
+
+  gateway:
+    <<: *service
+    command: node dist/apps/gateway/src/main.js
+    ports:
+      - "3000:3000"
+
+volumes:
+  pgdata:

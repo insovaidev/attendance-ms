@@ -1,0 +1,44 @@
+// Shift engine — owns shift definitions and who is assigned to what.
+// It stores userId as a plain string: there is NO foreign key to the
+// auth database, because that table lives in another service's DB.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum ShiftType {
+  FIXED    // same hours on the same weekdays
+  ROTATING // hours change by period; modelled as dated assignments (week A, week B...)
+  REMOTE   // tracked but never counted as late
+}
+
+model Shift {
+  id           String            @id @default(uuid()) @db.Uuid
+  name         String            @unique
+  type         ShiftType         @default(FIXED)
+  startTime    String            // "08:00" company time zone
+  endTime      String            // "17:00"
+  graceMinutes Int               @default(10)
+  days         Int[]             @default([1, 2, 3, 4, 5]) // 0 = Sunday
+  createdAt    DateTime          @default(now())
+  assignments  ShiftAssignment[]
+}
+
+model ShiftAssignment {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  shiftId   String    @db.Uuid
+  shift     Shift     @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  startDate DateTime  @db.Date
+  endDate   DateTime? @db.Date // null = open-ended
+  createdAt DateTime  @default(now())
+
+  @@index([userId, startDate])
+}

@@ -1,0 +1,54 @@
+{
+  "name": "attendance-ms",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#common": "./dist/libs/common/src/index.js"
+  },
+  "description": "Attendance system split into NestJS microservices (learning project)",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "build:watch": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "db:create": "node scripts/create-databases.mjs",
+    "prisma:generate": "prisma generate --config apps/auth/prisma.config.ts && prisma generate --config apps/shift/prisma.config.ts && prisma generate --config apps/attendance/prisma.config.ts && prisma generate --config apps/notification/prisma.config.ts",
+    "prisma:migrate": "prisma migrate dev --name init --config apps/auth/prisma.config.ts && prisma migrate dev --name init --config apps/shift/prisma.config.ts && prisma migrate dev --name init --config apps/attendance/prisma.config.ts && prisma migrate dev --name init --config apps/notification/prisma.config.ts",
+    "prisma:deploy": "prisma migrate deploy --config apps/auth/prisma.config.ts && prisma migrate deploy --config apps/shift/prisma.config.ts && prisma migrate deploy --config apps/attendance/prisma.config.ts && prisma migrate deploy --config apps/notification/prisma.config.ts",
+    "setup": "npm run db:create && npm run prisma:generate && npm run prisma:migrate",
+    "dev": "npm run build && concurrently -n tsc,gateway,auth,shift,attend,notify -c gray,cyan,magenta,yellow,green,blue \"npm:build:watch\" \"npm:dev:gateway\" \"npm:dev:auth\" \"npm:dev:shift\" \"npm:dev:attendance\" \"npm:dev:notification\"",
+    "dev:gateway": "node --watch --env-file-if-exists=.env dist/apps/gateway/src/main.js",
+    "dev:auth": "node --watch --env-file-if-exists=.env dist/apps/auth/src/main.js",
+    "dev:shift": "node --watch --env-file-if-exists=.env dist/apps/shift/src/main.js",
+    "dev:attendance": "node --watch --env-file-if-exists=.env dist/apps/attendance/src/main.js",
+    "dev:notification": "node --watch --env-file-if-exists=.env dist/apps/notification/src/main.js",
+    "start:gateway": "node --env-file-if-exists=.env dist/apps/gateway/src/main.js",
+    "start:auth": "node --env-file-if-exists=.env dist/apps/auth/src/main.js",
+    "start:shift": "node --env-file-if-exists=.env dist/apps/shift/src/main.js",
+    "start:attendance": "node --env-file-if-exists=.env dist/apps/attendance/src/main.js",
+    "start:notification": "node --env-file-if-exists=.env dist/apps/notification/src/main.js",
+    "demo": "node scripts/demo.mjs"
+  },
+  "dependencies": {
+    "@nestjs/common": "^12.1.1",
+    "@nestjs/core": "^12.1.1",
+    "@nestjs/jwt": "^12.0.2",
+    "@nestjs/microservices": "^12.1.1",
+    "@nestjs/platform-express": "^12.1.1",
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
+    "dotenv": "^18.0.4",
+    "pg": "^8.23.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "@types/pg": "^8.23.1",
+    "concurrently": "^10.0.5",
+    "prisma": "^7.10.0",
+    "typescript": "^5.9.3"
+  }
+}
