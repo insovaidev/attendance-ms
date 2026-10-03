@@ -1,3 +1,6 @@
+# My Questions
+- if every services deploy is used dif db, how the can use each onther
+
 # Attendance system, as microservices
 
 A learning project: the attendance system split into five NestJS services that talk over TCP, each with its own PostgreSQL database managed by Prisma.
@@ -25,6 +28,9 @@ A learning project: the attendance system split into five NestJS services that t
 | **notification** | Telegram links, send log | only receives events |
 
 Every internal TCP message carries a shared `INTERNAL_TOKEN`; services reject messages without it.
+
+Diagrams for every flow in this system (topology, login, check-in, the outbox,
+degradation, the guard chain): **[docs/FLOW.md](docs/FLOW.md)**.
 
 ## Run it locally
 
