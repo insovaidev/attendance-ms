@@ -14,6 +14,16 @@
     "skipLibCheck": true,
     "sourceMap": true,
     "removeComments": true,
-    "forceConsistentCasingInFileNames": true
-  }
+    "forceConsistentCasingInFileNames": true,
+
+    // "#common" (package.json "imports") points at ./dist/libs/common/src/index.js.
+    // The build emits no .d.ts, so TypeScript types it by mapping that output path
+    // back to libs/common/src/index.ts — which it can only do when rootDir and
+    // outDir are declared. They live here, not only in tsconfig.build.json, so the
+    // editor's language server resolves "#common" exactly like the build does.
+    "rootDir": ".",
+    "outDir": "./dist"
+  },
+  "include": ["apps/*/src/**/*.ts", "libs/*/src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "**/*.spec.ts"]
 }

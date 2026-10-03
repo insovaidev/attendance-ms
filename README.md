@@ -1,3 +1,6 @@
+# My Questions
+- if every services deploy is used dif db, how the can use each onther
+
 # Attendance system, as microservices
 
 A learning project: the attendance system split into six NestJS services. Requests go over TCP, events go through **Kafka**, and each service with data has its own PostgreSQL database managed by Prisma.
@@ -34,6 +37,9 @@ A learning project: the attendance system split into six NestJS services. Reques
 | **stats** | nothing: numbers in memory, rebuilt from Kafka | consumes `attendance.*` (its own group) |
 
 Every internal TCP message carries a shared `INTERNAL_TOKEN`; services reject messages without it. Kafka messages carry an HMAC signature of their value instead, so the secret itself is never written to the log.
+
+Diagrams for every flow in this system (topology, login, check-in, the outbox,
+degradation, the guard chain): **[docs/FLOW.md](docs/FLOW.md)**.
 
 ## Run it locally
 
