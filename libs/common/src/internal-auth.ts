@@ -1,4 +1,5 @@
 import { CanActivate, ExecutionContext, Injectable, Logger } from '@nestjs/common';
+import { KafkaContext } from '@nestjs/microservices';
 import { timingSafeEqual } from 'node:crypto';
 import { requiredSecret } from './config.js';
 import { rpcError } from './rpc-error.js';
@@ -11,6 +12,9 @@ import { rpcError } from './rpc-error.js';
  * global guard in every service) checks and strips it before the handler
  * runs. Without it, anything that can reach a service port could, for
  * example, send attendance.check_in for any user or list every account.
+ *
+ * Kafka messages are checked differently: they carry an HMAC signature in a
+ * header instead of the token itself (see consumeEvent() in kafka.ts).
  */
 const FIELD = '_internal';
 
@@ -39,6 +43,7 @@ export class InternalAuthGuard implements CanActivate {
 
   canActivate(context: ExecutionContext): boolean {
     if (context.getType() !== 'rpc') return true;
+    if (context.switchToRpc().getContext() instanceof KafkaContext) return true;
 
     const data = context.switchToRpc().getData<Record<string, unknown> | undefined>();
     if (data && typeof data === 'object' && isInternalTokenValid(data[FIELD])) {

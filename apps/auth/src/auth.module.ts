@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
-import { InternalAuthGuard, jwtExpiresIn, jwtSecret, outboxRelayProvider, SERVICES, tcpClients } from '#common';
+import { InternalAuthGuard, jwtExpiresIn, jwtSecret, kafkaProducer, outboxRelayProvider } from '#common';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { PrismaService } from './prisma.service.js';
@@ -11,14 +11,14 @@ import { PrismaService } from './prisma.service.js';
     JwtModule.registerAsync({
       useFactory: () => ({ secret: jwtSecret(), signOptions: { expiresIn: jwtExpiresIn() as never } }),
     }),
-    // Auth only publishes events (through the outbox); it never calls other services.
-    tcpClients(SERVICES.NOTIFICATION),
+    // Auth only publishes events (outbox -> Kafka); it never calls other services.
+    kafkaProducer('auth'),
   ],
   controllers: [AuthController],
   providers: [
     AuthService,
     PrismaService,
-    outboxRelayProvider(PrismaService, [SERVICES.NOTIFICATION]),
+    outboxRelayProvider(PrismaService),
     { provide: APP_GUARD, useClass: InternalAuthGuard },
   ],
 })

@@ -121,7 +121,8 @@ export class NotificationService {
    * event whose row is already SENT, or SKIPPED, is ignored. A PENDING or
    * FAILED row is sent again: that covers a crash between claiming and
    * sending, and Telegram being down. When sending fails we record FAILED
-   * and rethrow, so the outbox relay retries later with backoff.
+   * and rethrow: consumeEvent() retries a few times, then moves the message
+   * to "notification.dlq" (re-publish it later with npm run kafka:redrive).
    */
   private async deliver(
     eventId: string,

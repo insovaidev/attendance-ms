@@ -117,7 +117,7 @@ step('Admin opens the live dashboard stream (SSE)');
 const live = await listen(admin.accessToken);
 await sleep(300);
 
-step('Employee checks in (attendance → sync call to shift → outbox → notification, + live feed)');
+step('Employee checks in (attendance → sync call to shift → outbox → Kafka → notification + stats, + live feed)');
 const checkIn = await api('POST', '/attendance/check-in', { token: emp.accessToken, body: { note: 'demo' } });
 if (checkIn.status === 409) console.log('409:', checkIn.data.message, '(already checked in today — fine on reruns)');
 else console.log(checkIn.status, { status: checkIn.data.status, lateMinutes: checkIn.data.lateMinutes, shift: checkIn.data.shiftName });
@@ -130,7 +130,7 @@ step('Employee checks out');
 const out = await api('POST', '/attendance/check-out', { token: emp.accessToken });
 console.log(out.status, out.status === 201 ? { leftEarlyMinutes: out.data.leftEarlyMinutes } : out.data.message);
 
-await sleep(1500); // the outbox relay polls every second
+await sleep(2000); // the outbox relay polls every second, then Kafka consumers pick it up
 live.stop();
 
 step('Events the admin dashboard received over SSE');
@@ -145,4 +145,9 @@ step('Admin: notification log (what the notification service did with the events
 for (const n of (await api('GET', '/notifications/log?limit=6', { token: admin.accessToken })).data) {
   console.log(`${n.status.padEnd(7)} ${n.eventName.padEnd(24)} ${n.message}`);
 }
-console.log('\nDone.');
+step('Admin: today\'s stats (the stats service, built only from Kafka events)');
+const stats = (await api('GET', '/stats/daily', { token: admin.accessToken })).data;
+console.log({ checkedIn: stats.checkedIn, stillIn: stats.stillIn, byStatus: stats.byStatus, mostLate: stats.mostLate });
+console.log('read from Kafka:', stats.kafka);
+
+console.log('\nDone. Watch the topics and consumer groups in kafka-ui: http://localhost:8080');

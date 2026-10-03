@@ -1,10 +1,9 @@
-import { SERVICES, type ServiceToken } from './services.js';
-
 /**
- * Events = facts that already happened. (client.emit, fire-and-forget)
+ * Events = facts that already happened.
  *
  * The publisher does not wait and does not care who is listening.
  * Name events in the past tense: "checked_in", not "check_in".
+ * Each event name is also a Kafka topic (see kafka.ts).
  *
  * Every event carries an eventId so consumers can ignore duplicates
  * (see NotificationService — it stores eventId with a unique index).
@@ -17,18 +16,6 @@ export const EVENTS = {
 } as const;
 
 export type EventName = (typeof EVENTS)[keyof typeof EVENTS];
-
-/**
- * Durable consumers of each event. These are delivered through the outbox
- * (at-least-once, retried until acknowledged). The gateway's live SSE feed
- * is best-effort and is emitted directly with publish(), so it is not here.
- */
-export const EVENT_DESTINATIONS: Record<EventName, ServiceToken[]> = {
-  [EVENTS.USER_REGISTERED]: [SERVICES.NOTIFICATION],
-  [EVENTS.SHIFT_ASSIGNED]: [SERVICES.NOTIFICATION],
-  [EVENTS.ATTENDANCE_CHECKED_IN]: [SERVICES.NOTIFICATION],
-  [EVENTS.ATTENDANCE_CHECKED_OUT]: [SERVICES.NOTIFICATION],
-};
 
 export interface EventEnvelope<T> {
   eventId: string;

@@ -34,5 +34,10 @@ export const NOTIFICATION_PATTERNS = {
   LIST_LOG: 'notification.list_log',
 } as const;
 
+export const STATS_PATTERNS = {
+  /** Attendance numbers for one day, computed from the Kafka event log. */
+  DAILY: 'stats.daily',
+} as const;
+
 /** Every service answers this so the gateway can report health. */
 export const HEALTH_PATTERN = 'health.ping';
