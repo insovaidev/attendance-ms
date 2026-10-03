@@ -11,13 +11,20 @@ export class HealthController {
     @Inject(SERVICES.SHIFT) private readonly shift: ClientProxy,
     @Inject(SERVICES.ATTENDANCE) private readonly attendance: ClientProxy,
     @Inject(SERVICES.NOTIFICATION) private readonly notification: ClientProxy,
+    @Inject(SERVICES.STATS) private readonly stats: ClientProxy,
   ) {}
 
   /** Pings every service in parallel. Try stopping one and calling this again. */
   @Public()
   @Get()
   async check() {
-    const targets = { auth: this.auth, shift: this.shift, attendance: this.attendance, notification: this.notification };
+    const targets = {
+      auth: this.auth,
+      shift: this.shift,
+      attendance: this.attendance,
+      notification: this.notification,
+      stats: this.stats,
+    };
     const results = await Promise.all(
       Object.entries(targets).map(async ([name, client]) => {
         const started = Date.now();

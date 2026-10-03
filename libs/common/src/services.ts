@@ -10,6 +10,7 @@ export const SERVICES = {
   SHIFT: 'SHIFT_SERVICE',
   ATTENDANCE: 'ATTENDANCE_SERVICE',
   NOTIFICATION: 'NOTIFICATION_SERVICE',
+  STATS: 'STATS_SERVICE',
   GATEWAY_EVENTS: 'GATEWAY_EVENTS',
 } as const;
 
@@ -25,6 +26,7 @@ const defaults: Record<ServiceToken, { hostEnv: string; portEnv: string; port: n
   SHIFT_SERVICE: { hostEnv: 'SHIFT_HOST', portEnv: 'SHIFT_PORT', port: 4002 },
   ATTENDANCE_SERVICE: { hostEnv: 'ATTENDANCE_HOST', portEnv: 'ATTENDANCE_PORT', port: 4003 },
   NOTIFICATION_SERVICE: { hostEnv: 'NOTIFICATION_HOST', portEnv: 'NOTIFICATION_PORT', port: 4004 },
+  STATS_SERVICE: { hostEnv: 'STATS_HOST', portEnv: 'STATS_PORT', port: 4005 },
   // The gateway also listens on TCP so it can receive events for the SSE dashboard.
   GATEWAY_EVENTS: { hostEnv: 'GATEWAY_EVENTS_HOST', portEnv: 'GATEWAY_EVENTS_PORT', port: 4000 },
 };

@@ -10,3 +10,4 @@ export * from './publish.js';
 export * from './config.js';
 export * from './internal-auth.js';
 export * from './outbox.js';
+export * from './kafka.js';

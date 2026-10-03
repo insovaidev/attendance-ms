@@ -6,7 +6,8 @@ import { NotificationService } from './notification.service.js';
 import { PrismaService } from './prisma.service.js';
 import { TelegramSender } from './telegram.sender.js';
 
-// No clients: notification never calls anyone. It only receives.
+// No clients: notification never calls anyone. It only receives
+// (requests over TCP, events from Kafka).
 @Module({
   controllers: [NotificationController],
   providers: [

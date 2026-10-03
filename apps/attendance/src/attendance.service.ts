@@ -56,8 +56,8 @@ export class AttendanceService {
 
     // ---- The asynchronous part ------------------------------------------
     // The record and its event are committed in one transaction (outbox),
-    // so the notification is delivered even if notification is down right
-    // now or this process crashes right after the insert.
+    // so the event reaches Kafka even if Kafka is down right now or this
+    // process crashes right after the insert.
     let record;
     try {
       record = await this.prisma.$transaction(async (tx) => {

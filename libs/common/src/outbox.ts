@@ -1,9 +1,8 @@
 import { Logger, type OnApplicationBootstrap, type OnModuleDestroy, type Provider } from '@nestjs/common';
 import type { ClientProxy } from '@nestjs/microservices';
-import { firstValueFrom, timeout } from 'rxjs';
-import { envelope, EVENT_DESTINATIONS, type EventEnvelope, type EventName } from './events.js';
-import { withInternalToken } from './internal-auth.js';
-import type { ServiceToken } from './services.js';
+import { lastValueFrom, timeout } from 'rxjs';
+import { envelope, type EventEnvelope, type EventName } from './events.js';
+import { ensureTopics, KAFKA_PRODUCER, toKafkaMessage } from './kafka.js';
 
 /**
  * Transactional outbox.
@@ -11,10 +10,13 @@ import type { ServiceToken } from './services.js';
  * Instead of emitting an event right after a database write (and losing it
  * if the process crashes in between, or the consumer is down), the event is
  * inserted into the service's own "OutboxEvent" table in the SAME
- * transaction as the business change. A relay then delivers pending rows
- * with request/reply (so it knows the consumer processed them) and retries
- * with backoff until it succeeds. Delivery is at-least-once: consumers must
- * be idempotent (notification de-duplicates on eventId).
+ * transaction as the business change. A relay then publishes pending rows
+ * to Kafka (topic = event name) and retries with backoff until the broker
+ * acknowledges them. Delivery is at-least-once: consumers must be
+ * idempotent (notification de-duplicates on eventId).
+ *
+ * The relay doesn't know who consumes the events. Any number of consumer
+ * groups can read the topic (notification, stats, ...), each at its own pace.
  *
  * Each publishing service needs this model in its schema.prisma:
  *
@@ -34,15 +36,20 @@ export interface OutboxRow {
   payload: JsonObject;
 }
 
-/** Rows to insert (inside your transaction) for one event: one per destination. */
+/** Where outbox rows go. (Before Kafka, there was one row per consuming service.) */
+export const OUTBOX_DESTINATION = 'kafka';
+
+/** Rows to insert (inside your transaction) for one event. */
 export function outboxRows<T>(eventName: EventName, data: T): OutboxRow[] {
   const message = envelope(data);
-  return EVENT_DESTINATIONS[eventName].map((destination) => ({
-    eventId: message.eventId,
-    eventName,
-    destination,
-    payload: message as unknown as JsonObject,
-  }));
+  return [
+    {
+      eventId: message.eventId,
+      eventName,
+      destination: OUTBOX_DESTINATION,
+      payload: message as unknown as JsonObject,
+    },
+  ];
 }
 
 /** The raw-SQL surface of any generated PrismaClient. */
@@ -55,7 +62,7 @@ interface ClaimedRow {
   id: string;
   eventId: string;
   eventName: string;
-  destination: ServiceToken;
+  destination: string;
   payload: EventEnvelope<unknown>;
   attempts: number;
 }
@@ -74,10 +81,13 @@ export class OutboxRelay implements OnApplicationBootstrap, OnModuleDestroy {
   private timer?: NodeJS.Timeout;
   private running = false;
   private lastCleanup = 0;
+  private topicsReady = false;
 
   constructor(
     private readonly db: RawSqlClient,
-    private readonly clients: Partial<Record<ServiceToken, ClientProxy>>,
+    /** A ClientKafka (see kafkaProducer()). */
+    private readonly kafka: ClientProxy,
+    private readonly prepareTopics: () => Promise<void> = ensureTopics,
   ) {}
 
   onApplicationBootstrap() {
@@ -94,6 +104,7 @@ export class OutboxRelay implements OnApplicationBootstrap, OnModuleDestroy {
     if (this.running) return;
     this.running = true;
     try {
+      if (!(await this.ensureTopics())) return;
       // Prisma stores DateTime as UTC "timestamp without time zone", hence timezone('utc', now()).
       // Claim a batch. SKIP LOCKED + lockedUntil let several replicas run
       // the relay without delivering the same row at the same time.
@@ -117,12 +128,25 @@ export class OutboxRelay implements OnApplicationBootstrap, OnModuleDestroy {
     }
   }
 
-  private async deliver(row: ClaimedRow) {
-    const client = this.clients[row.destination];
+  /** Topics must exist (with the right partition count) before the first publish. */
+  private async ensureTopics(): Promise<boolean> {
+    if (this.topicsReady) return true;
     try {
-      if (!client) throw new Error(`No client registered for destination ${row.destination}`);
-      await firstValueFrom(
-        client.send(row.eventName, withInternalToken(row.payload)).pipe(timeout(DELIVERY_TIMEOUT_MS)),
+      await this.prepareTopics();
+      this.topicsReady = true;
+    } catch (err) {
+      this.logger.warn(`Kafka not reachable yet, events stay in the outbox: ${message(err)}`);
+    }
+    return this.topicsReady;
+  }
+
+  private async deliver(row: ClaimedRow) {
+    try {
+      // emit() resolves once the broker has written the message to the
+      // partition (acks from all in-sync replicas by default).
+      await lastValueFrom(
+        this.kafka.emit(row.eventName, toKafkaMessage(row.payload)).pipe(timeout(DELIVERY_TIMEOUT_MS)),
+        { defaultValue: undefined },
       );
       await this.db.$executeRawUnsafe(
         `UPDATE "OutboxEvent" SET "publishedAt" = timezone('utc', now()), "lockedUntil" = NULL, attempts = attempts + 1, "lastError" = NULL
@@ -133,7 +157,7 @@ export class OutboxRelay implements OnApplicationBootstrap, OnModuleDestroy {
       const attempts = row.attempts + 1;
       const delay = backoffSeconds(attempts);
       this.logger.warn(
-        `Delivering ${row.eventName} (${row.eventId}) to ${row.destination} failed (attempt ${attempts}), retry in ${delay}s: ${message(err)}`,
+        `Publishing ${row.eventName} (${row.eventId}) to Kafka failed (attempt ${attempts}), retry in ${delay}s: ${message(err)}`,
       );
       await this.db.$executeRawUnsafe(
         `UPDATE "OutboxEvent" SET attempts = $2, "lastError" = $3, "lockedUntil" = NULL,
@@ -158,16 +182,14 @@ export class OutboxRelay implements OnApplicationBootstrap, OnModuleDestroy {
 }
 
 /**
- * Nest provider for the relay. `prisma` is the service's PrismaService class;
- * `destinations` are the ServiceTokens its events go to (already registered
- * with tcpClients()).
+ * Nest provider for the relay. `prisma` is the service's PrismaService class.
+ * The module must also import kafkaProducer(...).
  */
-export function outboxRelayProvider(prisma: unknown, destinations: ServiceToken[]): Provider {
+export function outboxRelayProvider(prisma: unknown): Provider {
   return {
     provide: OutboxRelay,
-    inject: [prisma as never, ...destinations],
-    useFactory: (db: RawSqlClient, ...clients: ClientProxy[]) =>
-      new OutboxRelay(db, Object.fromEntries(destinations.map((d, i) => [d, clients[i]]))),
+    inject: [prisma as never, KAFKA_PRODUCER],
+    useFactory: (db: RawSqlClient, kafka: ClientProxy) => new OutboxRelay(db, kafka),
   };
 }
 

@@ -10,6 +10,7 @@ import { AuthController } from './controllers/auth.controller.js';
 import { HealthController } from './controllers/health.controller.js';
 import { NotificationsController } from './controllers/notifications.controller.js';
 import { ShiftsController } from './controllers/shifts.controller.js';
+import { StatsController } from './controllers/stats.controller.js';
 import { LiveEventsController } from './live/live-events.controller.js';
 import { LiveEventsService } from './live/live-events.service.js';
 
@@ -19,13 +20,14 @@ import { LiveEventsService } from './live/live-events.service.js';
     // so a normal request never has to call auth at all. jwtSecret() throws
     // at startup if JWT_SECRET is missing or a placeholder.
     JwtModule.registerAsync({ useFactory: () => ({ secret: jwtSecret() }) }),
-    tcpClients(SERVICES.AUTH, SERVICES.SHIFT, SERVICES.ATTENDANCE, SERVICES.NOTIFICATION),
+    tcpClients(SERVICES.AUTH, SERVICES.SHIFT, SERVICES.ATTENDANCE, SERVICES.NOTIFICATION, SERVICES.STATS),
   ],
   controllers: [
     AuthController,
     ShiftsController,
     AttendanceController,
     NotificationsController,
+    StatsController,
     HealthController,
     LiveEventsController,
   ],
